@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClickGo - Calculador por Kilometraje</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans min-h-screen flex flex-col justify-between">
+
+    <header class="bg-yellow-500 text-black text-center py-3 shadow-md">
+        <h1 class="text-xl font-bold tracking-wide">🚕 CLICKGO - KILOMETRAJE REAL</h1>
+        <p class="text-xs font-semibold uppercase">Tarifa: B/. 1.50 Base + B/. 0.60 por KM</p>
+    </header>
+
+    <main class="p-4 flex-grow flex flex-col space-y-4 max-w-md mx-auto w-full">
+        
+        <div class="bg-gray-800 p-3 rounded-xl border border-gray-700 flex flex-col space-y-1">
+            <div class="flex justify-between text-xs text-gray-400 font-bold uppercase">
+                <span>📍 Ubicación de Origen:</span>
+                <span id="estado-gps" class="text-red-400">Buscando GPS...</span>
+            </div>
+            <input id="input-origen" type="text" placeholder="Ej: Brisas del Golf, Panamá" class="w-full p-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white focus:outline-none focus:border-yellow-500">
+        </div>
+
+        <div class="flex flex-col">
+            <label class="text-yellow-400 font-bold mb-1 uppercase text-xs tracking-wider">🏁 ¿Hacia dónde va el cliente?</label>
+            <div class="flex space-x-2">
+                <div class="relative flex-grow flex items-center">
+                    <input id="input-destino" type="text" placeholder="Ej: Los Pueblos, El Dorado, Albrook" class="w-full p-3 pr-12 bg-gray-800 border-2 border-yellow-500 rounded-xl text-white focus:outline-none text-sm">
+                    <button type="button" onclick="activarMicrofono()" id="btn-mic" class="absolute right-2 text-gray-400 hover:text-yellow-500 p-2 transition focus:outline-none" title="Dictar por voz">
+                        🎙️
+                    </button>
+                </div>
+                <button onclick="calcularTarifaRuta()" class="bg-yellow-500 hover:bg-yellow-600 text-black font-bold px-4 rounded-xl text-sm transition">
+                    🧮 Calcular
+                </button>
+            </div>
+        </div>
+
+        <div class="bg-gray-800 p-3 rounded-xl border border-gray-700 grid grid-cols-2 gap-3 text-xs">
+            <label class="flex items-center space-x-2 justify-center p-2 bg-gray-700 rounded-lg cursor-pointer">
+                <input type="checkbox" id="chk-nocturno" onchange="recalcularPreciosEstaticos()" class="w-4 h-4 accent-yellow-500">
+                <span>🌙 Noche/Domingo (+0.25)</span>
+            </label>
+            <label class="flex items-center space-x-2 justify-center p-2 bg-gray-700 rounded-lg cursor-pointer">
+                <input type="number" id="num-pasajeros" value="0" min="0" onchange="recalcularPreciosEstaticos()" class="w-10 p-1 bg-gray-900 border border-gray-600 rounded text-center font-bold text-yellow-400">
+                <span>👥 Pasajeros Ext. (+0.50)</span>
+            </label>
+        </div>
+
+        <div class="bg-gray-800 border-4 border-yellow-500 rounded-3xl p-5 text-center shadow-2xl">
+            <p id="info-ruta" class="text-yellow-400 uppercase text-xs font-bold tracking-widest mb-1">Esperando Datos</p>
+            <div id="precio-final" class="text-5xl font-black text-white tracking-tight mb-3">
+                B/. 0.00
+            </div>
+            
+            <div class="grid grid-cols-2 gap-2 border-t border-gray-700 pt-3 text-xs text-gray-400">
+                <div>
+                    <p class="uppercase text-[10px]">Distancia Calculada</p>
+                    <p id="distancia-txt" class="font-bold text-base text-white">0.00 km</p>
+                </div>
+                <div>
+                    <p class="uppercase text-[10px]">Extras Sumados</p>
+                    <p id="extras-txt" class="font-bold text-base text-white">B/. 0.00</p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <footer class="p-3 bg-gray-950 text-center">
+        <button onclick="limpiarPantalla()" class="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-2.5 rounded-xl text-xs uppercase tracking-wider">
+            🔄 Nueva Carrera
+        </button>
+    </footer>
+
+    <script>
+        const TARIFA_BASE = 1.50;
+        const PRECIO_POR_KM = 0.60;
+
+        let distanciaGuardadaKM = 0;
+        let precioBaseRuta = 0;
+
+        // Auto-detectar ubicación o saltar a manual sin trabas
+        window.onload = function() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    async (position) => {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+                        document.getElementById('estado-gps').innerText = "📍 GPS Activo";
+                        document.getElementById('estado-gps').className = "text-green-400 font-bold uppercase text-xs";
+                        
+                        try {
+                            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+                            const data = await res.json();
+                            if (data && data.display_name) {
+                                document.getElementById('input-origen').value = data.display_name.split(',')[0] + ", Panamá";
+                            } else {
+                                document.getElementById('input-origen').value = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                            }
+                        } catch (e) {
+                            document.getElementById('input-origen').value = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                        }
+                    },
+                    () => { modoManualPC(); },
+                    { enableHighAccuracy: true, timeout: 2500 }
+                );
+            } else {
+                modoManualPC();
+            }
+        };
+
+        function modoManualPC() {
+            document.getElementById('estado-gps').innerText = "⌨️ Modo PC / Manual";
+            document.getElementById('estado-gps').className = "text-yellow-400 font-bold uppercase text-xs";
+            document.getElementById('input-origen').value = "Brisas del Golf, Panamá";
+        }
+
+        // --- FUNCIÓN INTELIGENTE DE DICTADO POR VOZ ---
+        function activarMicrofono() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            
+            if (!SpeechRecognition) {
+                alert("Tu navegador o dispositivo no soporta dictado por voz. Prueba en Google Chrome o desde el celular.");
+                return;
+            }
+
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'es-PA'; // Configurado con español de Panamá
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            const btnMic = document.getElementById('btn-mic');
+            const inputDestino = document.getElementById('input-destino');
+
+            // Cambiar aspecto visual al escuchar
+            btnMic.innerText = "🔴";
+            btnMic.classList.add("scale-110 animate-pulse");
+
+            recognition.start();
+
+            recognition.onresult = function(event) {
+                let textoVoz = event.results[0][0].transcript;
+                // Limpiar puntos innecesarios que a veces añade el teclado de Google
+                if(textoVoz.endsWith('.')) {
+                    textoVoz = textoVoz.slice(0, -1);
+                }
+                inputDestino.value = textoVoz;
+                
+                // Hace el cálculo automático inmediatamente después de que terminas de hablar
+                calcularTarifaRuta();
+            };
+
+            recognition.onspeechend = function() {
+                recognition.stop();
+                restaurarBotonMic();
+            };
+
+            recognition.onerror = function(event) {
+                restaurarBotonMic();
+                console.error("Error de reconocimiento de voz: " + event.error);
+            };
+
+            function restaurarBotonMic() {
+                btnMic.innerText = "🎙️";
+                btnMic.classList.remove("scale-110 animate-pulse");
+            }
+        }
+
+        // Buscar coordenadas y calcular kilometraje exacto (Haversine + Ajuste del 25%)
+        async function calcularTarifaRuta() {
+            const origenQuery = document.getElementById('input-origen').value.trim();
+            const destinoQuery = document.getElementById('input-destino').value.trim();
+
+            if (!origenQuery || !destinoQuery) {
+                return;
+            }
+
+            document.getElementById('precio-final').innerText = "...";
+            document.getElementById('info-ruta').innerText = "Calculando ruta...";
+
+            try {
+                const resOrigen = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(origenQuery + " Panama")}&limit=1`);
+                const dataOrigen = await resOrigen.json();
+
+                const resDestino = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinoQuery + " Panama")}&limit=1`);
+                const dataDestino = await resDestino.json();
+
+                if (dataOrigen.length === 0 || dataDestino.length === 0) {
+                    document.getElementById('info-ruta').innerText = "Destino no hallado";
+                    document.getElementById('precio-final').innerText = "B/. 0.00";
+                    return;
+                }
+
+                const lat1 = parseFloat(dataOrigen[0].lat);
+                const lon1 = parseFloat(dataOrigen[0].lon);
+                const lat2 = parseFloat(dataDestino[0].lat);
+                const lon2 = parseFloat(dataDestino[0].lon);
+
+                const R = 6371; 
+                const dLat = (lat2 - lat1) * Math.PI / 180;
+                const dLon = (lon2 - lon1) * Math.PI / 180;
+                const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                
+                distanciaGuardadaKM = (R * c) * 1.25; 
+                precioBaseRuta = TARIFA_BASE + (distanciaGuardadaKM * PRECIO_POR_KM);
+
+                document.getElementById('distancia-txt').innerText = `${distanciaGuardadaKM.toFixed(2)} km`;
+                document.getElementById('info-ruta').innerText = "Ruta Calculada con Éxito";
+
+                recalcularPreciosEstaticos();
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('precio-final').innerText = "B/. 0.00";
+            }
+        }
+
+        function recalcularPreciosEstaticos() {
+            if (precioBaseRuta === 0) return;
+
+            let extras = 0;
+
+            if (document.getElementById('chk-nocturno').checked) {
+                extras += 0.25;
+            }
+
+            const pasajeros = parseInt(document.getElementById('num-pasajeros').value) || 0;
+            if (pasajeros > 0) {
+                extras += (pasajeros * 0.50);
+            }
+
+            const totalBruto = precioBaseRuta + extras;
+            const totalRedondeado = Math.round(totalBruto * 4) / 4;
+
+            document.getElementById('extras-txt').innerText = `B/. ${extras.toFixed(2)}`;
+            document.getElementById('precio-final').innerText = `B/. ${totalRedondeado.toFixed(2)}`;
+        }
+
+        function limpiarPantalla() {
+            document.getElementById('input-destino').value = "";
+            document.getElementById('precio-final').innerText = "B/. 0.00";
+            document.getElementById('distancia-txt').innerText = "0.00 km";
+            document.getElementById('extras-txt').innerText = "B/. 0.00";
+            document.getElementById('info-ruta').innerText = "Esperando Datos";
+            document.getElementById('chk-nocturno').checked = false;
+            document.getElementById('num-pasajeros').value = "0";
+            distanciaGuardadaKM = 0;
+            precioBaseRuta = 0;
+        }
+    </script>
+</body>
+</html>
