@@ -67,6 +67,10 @@
             </div>
         </div>
 
+        <button onclick="enviarWhatsApp()" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl text-sm uppercase tracking-wider flex justify-center items-center space-x-2 shadow-lg transition">
+            <span>💬 Enviar Detalle por WhatsApp</span>
+        </button>
+
     </main>
 
     <footer class="p-3 bg-gray-950 text-center">
@@ -81,31 +85,26 @@
 
         let distanciaGuardadaKM = 0;
         let precioBaseRuta = 0;
+        let totalFinalCalculado = "0.00";
 
-        // Auto-detectar ubicación o saltar a manual sin trabas
+        // Variables globales para guardar las coordenadas reales del GPS
+        let gpsLat = null;
+        let gpsLon = null;
+
         window.onload = function() {
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(
                     async (position) => {
-                        const lat = position.coords.latitude;
-                        const lon = position.coords.longitude;
+                        gpsLat = position.coords.latitude;
+                        gpsLon = position.coords.longitude;
                         document.getElementById('estado-gps').innerText = "📍 GPS Activo";
                         document.getElementById('estado-gps').className = "text-green-400 font-bold uppercase text-xs";
                         
-                        try {
-                            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
-                            const data = await res.json();
-                            if (data && data.display_name) {
-                                document.getElementById('input-origen').value = data.display_name.split(',')[0] + ", Panamá";
-                            } else {
-                                document.getElementById('input-origen').value = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-                            }
-                        } catch (e) {
-                            document.getElementById('input-origen').value = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-                        }
+                        // Llenar el cuadro de origen con texto guía visual para el usuario
+                        document.getElementById('input-origen').value = "Mi Ubicación Actual (GPS)";
                     },
                     () => { modoManualPC(); },
-                    { enableHighAccuracy: true, timeout: 2500 }
+                    { enableHighAccuracy: true, timeout: 5000 }
                 );
             } else {
                 modoManualPC();
@@ -113,43 +112,33 @@
         };
 
         function modoManualPC() {
+            gpsLat = null;
+            gpsLon = null;
             document.getElementById('estado-gps').innerText = "⌨️ Modo PC / Manual";
             document.getElementById('estado-gps').className = "text-yellow-400 font-bold uppercase text-xs";
             document.getElementById('input-origen').value = "Brisas del Golf, Panamá";
         }
 
-        // --- FUNCIÓN INTELIGENTE DE DICTADO POR VOZ ---
         function activarMicrofono() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            
             if (!SpeechRecognition) {
-                alert("Tu navegador o dispositivo no soporta dictado por voz. Prueba en Google Chrome o desde el celular.");
+                alert("Tu navegador no soporta dictado por voz. Usa Google Chrome.");
                 return;
             }
 
             const recognition = new SpeechRecognition();
-            recognition.lang = 'es-PA'; // Configurado con español de Panamá
-            recognition.interimResults = false;
-            recognition.maxAlternatives = 1;
-
+            recognition.lang = 'es-PA';
             const btnMic = document.getElementById('btn-mic');
             const inputDestino = document.getElementById('input-destino');
 
-            // Cambiar aspecto visual al escuchar
             btnMic.innerText = "🔴";
             btnMic.classList.add("scale-110 animate-pulse");
-
             recognition.start();
 
             recognition.onresult = function(event) {
                 let textoVoz = event.results[0][0].transcript;
-                // Limpiar puntos innecesarios que a veces añade el teclado de Google
-                if(textoVoz.endsWith('.')) {
-                    textoVoz = textoVoz.slice(0, -1);
-                }
+                if(textoVoz.endsWith('.')) { textoVoz = textoVoz.slice(0, -1); }
                 inputDestino.value = textoVoz;
-                
-                // Hace el cálculo automático inmediatamente después de que terminas de hablar
                 calcularTarifaRuta();
             };
 
@@ -158,9 +147,8 @@
                 restaurarBotonMic();
             };
 
-            recognition.onerror = function(event) {
+            recognition.onerror = function() {
                 restaurarBotonMic();
-                console.error("Error de reconocimiento de voz: " + event.error);
             };
 
             function restaurarBotonMic() {
@@ -169,12 +157,13 @@
             }
         }
 
-        // Buscar coordenadas y calcular kilometraje exacto (Haversine + Ajuste del 25%)
+        // --- SISTEMA DE CÁLCULO REPARADO Y BLINDADO ---
         async function calcularTarifaRuta() {
             const origenQuery = document.getElementById('input-origen').value.trim();
             const destinoQuery = document.getElementById('input-destino').value.trim();
 
             if (!origenQuery || !destinoQuery) {
+                alert("Por favor introduce un destino.");
                 return;
             }
 
@@ -182,23 +171,39 @@
             document.getElementById('info-ruta').innerText = "Calculando ruta...";
 
             try {
-                const resOrigen = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(origenQuery + " Panama")}&limit=1`);
-                const dataOrigen = await resOrigen.json();
+                let lat1, lon1;
 
+                // Si el GPS está activo y el usuario no borró el texto automático, usamos las coordenadas directas del satélite
+                if (gpsLat !== null && gpsLon !== null && origenQuery === "Mi Ubicación Actual (GPS)") {
+                    lat1 = gpsLat;
+                    lon1 = gpsLon;
+                } else {
+                    // Si está en PC o escribió a mano, busca las coordenadas del origen en internet
+                    const resOrigen = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(origenQuery + " Panama")}&limit=1`);
+                    const dataOrigen = await resOrigen.json();
+                    if (dataOrigen.length === 0) {
+                        alert("No se encontró el origen. Escríbelo de forma más clara.");
+                        resetPreciosError();
+                        return;
+                    }
+                    lat1 = parseFloat(dataOrigen[0].lat);
+                    lon1 = parseFloat(dataOrigen[0].lon);
+                }
+
+                // Buscar las coordenadas del destino en internet
                 const resDestino = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destinoQuery + " Panama")}&limit=1`);
                 const dataDestino = await resDestino.json();
 
-                if (dataOrigen.length === 0 || dataDestino.length === 0) {
+                if (dataDestino.length === 0) {
                     document.getElementById('info-ruta').innerText = "Destino no hallado";
                     document.getElementById('precio-final').innerText = "B/. 0.00";
                     return;
                 }
 
-                const lat1 = parseFloat(dataOrigen[0].lat);
-                const lon1 = parseFloat(dataOrigen[0].lon);
                 const lat2 = parseFloat(dataDestino[0].lat);
                 const lon2 = parseFloat(dataDestino[0].lon);
 
+                // Fórmula matemática de distancia (Haversine)
                 const R = 6371; 
                 const dLat = (lat2 - lat1) * Math.PI / 180;
                 const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -206,6 +211,7 @@
                           Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
                 const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
                 
+                // 1.25 de ajuste por curvas y calles de Panamá
                 distanciaGuardadaKM = (R * c) * 1.25; 
                 precioBaseRuta = TARIFA_BASE + (distanciaGuardadaKM * PRECIO_POR_KM);
 
@@ -216,29 +222,48 @@
 
             } catch (error) {
                 console.error(error);
-                document.getElementById('precio-final').innerText = "B/. 0.00";
+                resetPreciosError();
             }
+        }
+
+        function resetPreciosError() {
+            document.getElementById('info-ruta').innerText = "Error en el cálculo";
+            document.getElementById('precio-final').innerText = "B/. 0.00";
         }
 
         function recalcularPreciosEstaticos() {
             if (precioBaseRuta === 0) return;
 
             let extras = 0;
-
-            if (document.getElementById('chk-nocturno').checked) {
-                extras += 0.25;
-            }
+            if (document.getElementById('chk-nocturno').checked) { extras += 0.25; }
 
             const pasajeros = parseInt(document.getElementById('num-pasajeros').value) || 0;
-            if (pasajeros > 0) {
-                extras += (pasajeros * 0.50);
-            }
+            if (pasajeros > 0) { extras += (pasajeros * 0.50); }
 
             const totalBruto = precioBaseRuta + extras;
             const totalRedondeado = Math.round(totalBruto * 4) / 4;
-
+            
+            totalFinalCalculado = totalRedondeado.toFixed(2);
             document.getElementById('extras-txt').innerText = `B/. ${extras.toFixed(2)}`;
-            document.getElementById('precio-final').innerText = `B/. ${totalRedondeado.toFixed(2)}`;
+            document.getElementById('precio-final').innerText = `B/. ${totalFinalCalculado}`;
+        }
+
+        function enviarWhatsApp() {
+            const origen = document.getElementById('input-origen').value.trim();
+            const destino = document.getElementById('input-destino').value.trim();
+
+            if (precioBaseRuta === 0 || !destino) {
+                alert("Primero debes calcular una ruta válida.");
+                return;
+            }
+
+            const mensaje = `🚕 *DETALLE DE CARRERA - CLICKGO*\n\n` +
+                            `📍 *Origen:* ${origen}\n` +
+                            `🏁 *Destino:* ${destino}\n` +
+                            `📏 *Distancia:* ${distanciaGuardadaKM.toFixed(2)} km\n` +
+                            `💰 *TOTAL REDONDEADO: B/. ${totalFinalCalculado}*`;
+
+            window.open(`https://wa.me/?text=${encodeURIComponent(mensaje)}`, '_blank');
         }
 
         function limpiarPantalla() {
@@ -251,6 +276,7 @@
             document.getElementById('num-pasajeros').value = "0";
             distanciaGuardadaKM = 0;
             precioBaseRuta = 0;
+            totalFinalCalculado = "0.00";
         }
     </script>
 </body>
